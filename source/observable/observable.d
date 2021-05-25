@@ -174,7 +174,7 @@ struct Observable(T, EXTRA_STORAGE = void)
 {
 	alias Event = ObservedEvent!T;
 
-	private struct Payload {
+	private static struct Payload {
 		Signal!Event signal;
 		bool closed;
 		static if (!is(EXTRA_STORAGE == void))
