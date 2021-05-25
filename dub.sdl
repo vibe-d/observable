@@ -1,0 +1,9 @@
+name "observable"
+description "Provides event handling facilities based on observable and signal slot approaches"
+copyright "Copyright © 2021, Sönke Ludwig"
+license "MIT"
+authors "Sönke Ludwig"
+
+targetType "library"
+
+dependency "vibe-core" version="~>1.0"
