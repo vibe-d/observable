@@ -15,6 +15,8 @@ augmented using a range-like API.
 Both, signals and observables support storing extra data to avoid the need for
 creating heap closures when listening for events.
 
+![Build status](https://github.com/s-ludwig/observable/actions/workflows/ci.yml/badge.svg?branch=master)
+
 
 Signal/slot example
 -------------------
