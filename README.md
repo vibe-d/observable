@@ -67,7 +67,7 @@ Observable example
 class Slider {
     private {
         double m_value = 0.0;
-        Observable!double m_valueChanges;
+        ObservableSource!double m_valueChanges;
     }
 
     @property ref Observable!double valueChanges()
