@@ -55,7 +55,7 @@ struct Signal(P...) {
 }
 
 ///
-unittest {
+@safe nothrow unittest {
 	// declare a signal
 	Signal!int signal;
 
@@ -82,12 +82,12 @@ unittest {
 		SignalConnection conn;
 
 		this()
-		{
+		@safe nothrow {
 			signal.socket.connect(conn, &slot);
 		}
 
 		void slot(int i)
-		nothrow {
+		@safe nothrow {
 			assert(i == 32);
 		}
 	}
@@ -135,6 +135,27 @@ unittest {
 	auto w = new Widget;
 	l.setClient(w);
 	w.setVisibility(true);
+}
+
+// connecting @system callbacks and using @system parameters should be @system
+unittest {
+	Signal!int sig;
+	struct C { void opCall(int) @safe nothrow {} }
+	struct CS { void opCall(int) @system nothrow {} }
+	struct US { this(this) @system nothrow {} }
+
+	SignalConnection c;
+	static assert(__traits(compiles, () @safe { sig.socket.connect(c, (i) @safe {}); }));
+	static assert(!__traits(compiles, () @safe { sig.socket.connect(c, (i) @system {}); }));
+	static assert(__traits(compiles, () @safe { C clbl; sig.socket.connect(c, clbl); }));
+	static assert(!__traits(compiles, () @safe { CS clbl; sig.socket.connect(c, clbl); }));
+	() @safe { sig.emit(0); } ();
+
+	Signal!US usig;
+	static assert(__traits(compiles, () @system { usig.socket.connect(c, (i) @safe {}); }));
+	static assert(!__traits(compiles, () @safe { usig.socket.connect(c, (i) @safe {}); }));
+	static assert(__traits(compiles, (ref US p) @system { usig.emit(p); }));
+	static assert(!__traits(compiles, (ref US p) @safe { usig.emit(p); }));
 }
 
 // test disconnectAll from within a callback
@@ -209,16 +230,16 @@ unittest {
 struct SignalConnection {
 	private ConnectionHead m_ctx;
 
-	private this(ConnectionHead h) nothrow { m_ctx = h; retain(); }
+	private this(ConnectionHead h) @safe nothrow { m_ctx = h; retain(); }
 
-	this(this) nothrow { retain(); }
+	this(this) @safe nothrow { retain(); }
 
-	~this() nothrow { release(); }
+	~this() @safe nothrow { release(); }
 
-	@property bool connected() const nothrow { return m_ctx !is null && m_ctx.prev !is null; }
+	@property bool connected() const @safe nothrow { return m_ctx !is null && m_ctx.prev !is null; }
 
 	void disconnect()
-	nothrow {
+	@safe nothrow {
 		if (!m_ctx) return;
 		assert(m_ctx.rc > 0, "Stale connection reference");
 
@@ -246,12 +267,12 @@ struct SignalConnection {
 	}
 
 	private void retain()
-	nothrow {
+	@safe nothrow {
 		if (m_ctx) m_ctx.rc++;
 	}
 
 	private void release()
-	nothrow {
+	@safe nothrow {
 		if (m_ctx) {
 			assert(m_ctx.rc > 0, "Stale connection reference");
 			if (m_ctx.rc == 1) {
@@ -362,17 +383,26 @@ struct SignalConnectionContainer {
 	import std.container.array : Array;
 
 	private {
-		Array!SignalConnection m_connections;
+		SignalConnection[4] m_smallConnections;
+		size_t m_smallConnectionCount;
+		//Array!SignalConnection m_connections;
+		SignalConnection[] m_connections;
 	}
 
 	void add(SignalConnection conn)
-	nothrow {
-		m_connections ~= conn;
+	@safe nothrow {
+		if (m_smallConnectionCount < m_smallConnections.length)
+			m_smallConnections[m_smallConnectionCount++] = conn;
+		else m_connections ~= conn;
 	}
 
 	void clear()
-	nothrow {
-		m_connections.clear();
+	@safe nothrow {
+		m_connections.length = 0;
+		() @trusted { m_connections.assumeSafeAppend(); } ();
+		//m_connections.clear();
+		m_smallConnections[] = SignalConnection.init;
+		m_smallConnectionCount = 0;
 	}
 }
 
@@ -411,12 +441,24 @@ static struct SignalSocket(PARAMS...) {
 		}
 	}
 
-	void connect(ref SignalConnection c, void delegate(Params) nothrow callable)
+	void connect(ref SignalConnection c, void delegate(Params) @system nothrow callable)
 	{
 		push(c.setCallable!SignalSocket(callable));
 	}
 
-	void connect(ref SignalConnectionContainer cc, void delegate(Params) nothrow callable)
+	void connect(ref SignalConnectionContainer cc, void delegate(Params) @system nothrow callable)
+	{
+		SignalConnection c;
+		connect(c, callable);
+		cc.add(c);
+	}
+
+	void connect(ref SignalConnection c, void delegate(Params) @safe nothrow callable)
+	{
+		push(c.setCallable!SignalSocket(callable));
+	}
+
+	void connect(ref SignalConnectionContainer cc, void delegate(Params) @safe nothrow callable)
 	{
 		SignalConnection c;
 		connect(c, callable);
@@ -525,6 +567,10 @@ static struct SignalSocket(PARAMS...) {
 	nothrow {
 		if (!m_pivot || m_pivot is m_pivot.next) return;
 
+		// make emit @system in case Params cannot be copied/destroyed @safely
+		static if (!__traits(compiles, () @safe { Params p; auto q = p; }))
+			systemFun();
+
 		// NOTE using SignalConnection to ensure that the ConnectionHeads don't
 		// get destroyed while iterating over the list
 		auto el = SignalConnection(m_pivot.next);
@@ -547,11 +593,11 @@ private class ConnectionHead {
 	ConnectionHead prev, next;
 	int rc = 1;
 
-	abstract void dispose() nothrow;
+	abstract void dispose() @safe nothrow;
 }
 
 private class TypedConnectionHead(P...) : ConnectionHead {
-	abstract void call(ref P params) nothrow;
+	abstract void call(ref P params) @safe nothrow;
 }
 
 private final class CallableConnectionHead(S, C, FP...) : TypedConnectionHead!(S.Params) {
@@ -578,12 +624,18 @@ private final class CallableConnectionHead(S, C, FP...) : TypedConnectionHead!(S
 	}
 
 	override void call(ref S.Params params)
-	{
+	@trusted {
 		callable(params, fixedParams);
 	}
 
 	static CallableConnectionHead make(ref C c, ref FP fp)
 	{
+		// force this to be @system in case c() is @system, because the emit()
+		// API is always @safe
+		static if (!__traits(compiles, () @safe { S.Params p1; FP p2;  c(p1, p2); })) {
+			systemFun();
+		}
+
 		// NOTE: using the GC is mandatory, so that when a class stores the
 		// connection to its own member function, it isn't kept alive
 		// indefinitely due to the manually allocated GC range that keeps a
@@ -594,11 +646,10 @@ private final class CallableConnectionHead(S, C, FP...) : TypedConnectionHead!(S
 	}
 
 	final override void dispose()
-	nothrow {
-		import core.memory : GC;
-		scope (failure) assert(false);
-		auto thiscopy = this;
-		destroy(thiscopy);
+	@trusted nothrow {
+		destroy(callable);
+		foreach (i, P; FP)
+			destroy(fixedParams[i]);
 	}
 }
 
@@ -762,3 +813,6 @@ class SharedSignal(P...) {
 		}
 	}
 }
+
+
+private void systemFun() @system nothrow {}
