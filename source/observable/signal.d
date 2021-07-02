@@ -385,13 +385,7 @@ struct SignalConnectionContainer {
 	private {
 		SignalConnection[4] m_smallConnections;
 		size_t m_smallConnectionCount;
-		//Array!SignalConnection m_connections;
-		SignalConnection[] m_connections;
-	}
-
-	this(this)
-	@safe nothrow {
-		if (m_connections.length) m_connections = m_connections.dup;
+		Array!SignalConnection m_connections;
 	}
 
 	~this()
@@ -404,20 +398,13 @@ struct SignalConnectionContainer {
 		if (m_smallConnectionCount < m_smallConnections.length)
 			m_smallConnections[m_smallConnectionCount++] = conn;
 		else {
-			auto oldconn = m_connections;
-			m_connections ~= conn;
-			// don't leave stale connections behind after reallocations
-			if (oldconn.ptr !is m_connections.ptr)
-				oldconn[] = SignalConnection.init;
+			() @trusted { m_connections ~= conn; } ();
 		}
 	}
 
 	void clear()
 	@safe nothrow {
-		m_connections[] = SignalConnection.init;
-		m_connections.length = 0;
-		() @trusted { m_connections.assumeSafeAppend(); } ();
-		//m_connections.clear();
+		() @trusted { m_connections.clear(); } ();
 		m_smallConnections[0 .. m_smallConnectionCount] = SignalConnection.init;
 		m_smallConnectionCount = 0;
 	}
@@ -690,10 +677,10 @@ private final class CallableConnectionHead(S, C, FP...) : TypedConnectionHead!(S
 
 	final override void dispose()
 	@trusted nothrow {
-		destroy(callable);
-		foreach (i, P; FP)
-			destroy(fixedParams[i]);
-		prev = next = null;
+		import core.memory : GC;
+		scope (failure) assert(false);
+		auto thiscopy = this;
+		destroy(thiscopy);
 	}
 }
 
