@@ -389,21 +389,64 @@ struct SignalConnectionContainer {
 		SignalConnection[] m_connections;
 	}
 
+	this(this)
+	@safe nothrow {
+		if (m_connections.length) m_connections = m_connections.dup;
+	}
+
+	~this()
+	@safe nothrow {
+		clear();
+	}
+
 	void add(SignalConnection conn)
 	@safe nothrow {
 		if (m_smallConnectionCount < m_smallConnections.length)
 			m_smallConnections[m_smallConnectionCount++] = conn;
-		else m_connections ~= conn;
+		else {
+			auto oldconn = m_connections;
+			m_connections ~= conn;
+			// don't leave stale connections behind after reallocations
+			if (oldconn.ptr !is m_connections.ptr)
+				oldconn[] = SignalConnection.init;
+		}
 	}
 
 	void clear()
 	@safe nothrow {
+		m_connections[] = SignalConnection.init;
 		m_connections.length = 0;
 		() @trusted { m_connections.assumeSafeAppend(); } ();
 		//m_connections.clear();
-		m_smallConnections[] = SignalConnection.init;
+		m_smallConnections[0 .. m_smallConnectionCount] = SignalConnection.init;
 		m_smallConnectionCount = 0;
 	}
+}
+
+unittest {
+	SignalConnectionContainer c;
+	Signal!() sig;
+	size_t cnt = 0;
+	foreach (i; 0 .. 10) sig.socket.connect(c, { cnt++; });
+	assert(cnt == 0);
+	sig.emit();
+	assert(cnt == 10);
+	c.clear();
+	sig.emit();
+	assert(cnt == 10);
+}
+
+unittest {
+	SignalConnectionContainer c;
+	Signal!() sig;
+	size_t cnt = 0;
+	foreach (i; 0 .. 10) sig.socket.connect(c, { cnt++; });
+	assert(cnt == 0);
+	sig.emit();
+	assert(cnt == 10);
+	c = SignalConnectionContainer.init;
+	sig.emit();
+	assert(cnt == 10);
 }
 
 
@@ -650,6 +693,7 @@ private final class CallableConnectionHead(S, C, FP...) : TypedConnectionHead!(S
 		destroy(callable);
 		foreach (i, P; FP)
 			destroy(fixedParams[i]);
+		prev = next = null;
 	}
 }
 
