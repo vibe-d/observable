@@ -1,5 +1,5 @@
-Observable and signal/slot implmentation
-========================================
+Observable and signal/slot implementation
+=========================================
 
 This library provides event handling mechanisms on two abstraction levels.
 Signals/slots are a direct way for events to be propagated to any number of
@@ -12,7 +12,7 @@ that each observer can process events in order, but independent of the timing
 of the source. Additionally, observables can be composed, manipulated and
 augmented using a range-like API.
 
-Both, signals and observables support storing extra data to avoid the need for
+Both, signals and observables, support storing extra data to avoid the need for
 creating heap closures when listening for events.
 
 ![Build status](https://github.com/s-ludwig/observable/actions/workflows/ci.yml/badge.svg?branch=master)
