@@ -327,6 +327,16 @@ struct Observer(T)
 		return false;
 	}
 
+	/** Determines whether any more events are currently pending.
+
+		This property is `true` *iff* calling `popFront` will yield an
+		additional event without waiting.
+	*/
+	@property bool pending()
+	const {
+		return !m_payload.buffer.length > 1;
+	}
+
 	/** Input range `front` property.
 
 		The caller must make sure that there is actually still an element
