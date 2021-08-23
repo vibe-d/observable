@@ -334,7 +334,7 @@ struct Observer(T)
 	*/
 	@property bool pending()
 	const {
-		return !m_payload.buffer.length > 1;
+		return m_payload.buffer.length > 1;
 	}
 
 	/** Input range `front` property.
@@ -400,6 +400,20 @@ struct Observer(T)
 		m_payload.event = createManualEvent();
 		observable.connect(m_payload.conn, &m_payload.put);
 	}
+}
+
+unittest {
+	ObservableSource!int o;
+	auto obs = o.subscribe();
+	assert(!obs.pending);
+	o.put(1);
+	assert(obs.front == 1);
+	assert(!obs.pending);
+	o.put(2);
+	assert(obs.pending);
+	obs.popFront();
+	assert(obs.front == 2);
+	assert(!obs.pending);
 }
 
 import std.range : isInputRange;
