@@ -329,12 +329,13 @@ struct Observer(T)
 
 	/** Determines whether any more events are currently pending.
 
-		This property is `true` *iff* calling `popFront` will yield an
-		additional event without waiting.
+		This property is `true` *iff* an event is immediately available, i.e.
+		that `front` yields a value without waiting. Note that `empty` is
+		guaranteed to return `false` in this case.
 	*/
 	@property bool pending()
 	const {
-		return m_payload.buffer.length > 1;
+		return m_payload.buffer.length >= 1;
 	}
 
 	/** Input range `front` property.
@@ -408,12 +409,18 @@ unittest {
 	assert(!obs.pending);
 	o.put(1);
 	assert(obs.front == 1);
-	assert(!obs.pending);
+	assert(obs.pending);
+	assert(!obs.empty);
 	o.put(2);
 	assert(obs.pending);
 	obs.popFront();
 	assert(obs.front == 2);
+	assert(obs.pending);
+	assert(!obs.empty);
+	obs.popFront();
 	assert(!obs.pending);
+	o.close();
+	assert(obs.empty);
 }
 
 import std.range : isInputRange;
