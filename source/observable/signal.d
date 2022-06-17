@@ -693,7 +693,7 @@ private final class CallableConnectionHead(S, C, FP...) : TypedConnectionHead!(S
 
 	Slots will always be called asynchronously in the same thread in which they
 	were registered. Thus, SharedSignal is thread-safe, even if non-thread-safe
-	delegates are used as slots. However, the argument types passed to emit()
+	delegates are used as slots. However, the argument types passed to `emit`
 	must be weakly shared.
 
 	Examples:
@@ -708,7 +708,7 @@ private final class CallableConnectionHead(S, C, FP...) : TypedConnectionHead!(S
 			signal.connect((value){
 				assert(Thread.getThis() is mainthr);
 				writefln("Value: %d", value);
-			}
+			});
 
 			auto thr = new Thread({ signal.emit(42); });
 			thr.run();
