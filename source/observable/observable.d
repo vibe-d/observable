@@ -86,13 +86,29 @@ nothrow unittest {
 	blocking manner. Usually, a separate task is used to drain the observer to
 	ensure sequential processing with no concurrency/race-conditions.
 */
-Observer!(ObservableType!O) subscribe(O)(O observable)
+Observer!(ObservableType!O) subscribe(O)(auto ref O observable)
 	if (isObservable!O)
 {
-	assert (!observable.closed, "Subscribing to closed observable.");
 	Observer!(ObservableType!O) ret;
 	ret.initialize(observable);
 	return ret;
+}
+
+unittest { // test non-copyable observable
+	static struct MyObservable {
+		alias Event = ObservedEvent!int;
+		private Signal!Event m_signal;
+		void connect(C, ARGS...)(ref SignalConnection conn, C c, ARGS args)
+		nothrow {
+			m_signal.socket.connect(conn, c, args);
+		}
+		@disable this(this);
+	}
+
+	MyObservable mo;
+	auto o = mo.subscribe();
+	mo.m_signal.emit(MyObservable.Event(1));
+	assert(o.consumeOne == 1);
 }
 
 
@@ -113,8 +129,7 @@ Observer!(ObservableType!O) subscribe(O)(O observable)
 enum isObservable(O) =
 	is(O.Event)
 	&& __traits(compiles, (SignalConnection c) { O.init
-		.connect(c, delegate(O.Event itm, int, int, int) {}, 1, 2, 3); })
-	&& is(typeof(O.init.closed) == bool);
+		.connect(c, delegate(O.Event itm, int, int, int) {}, 1, 2, 3); });
 
 static assert(isObservable!(Observable!int));
 static assert(isObservable!(ObservableSource!int));
@@ -219,7 +234,8 @@ struct Observable(T, EXTRA_STORAGE = void)
 			"Observable connection callback must be nothrow.");
 
 		initialize();
-		m_payload.signal.socket.connect(connection, callable, args);
+		if (this.closed) callable(Event.close(), args);
+		else m_payload.signal.socket.connect(connection, callable, args);
 	}
 
 	static if (!is(EXTRA_STORAGE == void)) {
@@ -452,8 +468,6 @@ auto map(alias fun, O)(O source)
 
 		alias Event = ObservedEvent!TM;
 
-		@property bool closed() const { return source.closed; }
-
 		void connect(C, ARGS...)(ref SignalConnection connection, C callable, ARGS args)
 		{
 			source.connect(connection, function(ObservedEvent!T val, C callable, ARGS args) {
@@ -509,6 +523,7 @@ auto merge(OBSERVERS...)(OBSERVERS observers)
 
 	static struct ES {
 		OBSERVERS sources;
+		bool[OBSERVERS.length] closed;
 		SignalConnection[OBSERVERS.length] connections;
 
 		@disable this(this);
@@ -525,10 +540,11 @@ auto merge(OBSERVERS...)(OBSERVERS observers)
 				assert(!target.closed, "An observer was closed after the merged observer is already closed!?");
 
 				es.connections[i].disconnect();
+				es.closed[i] = true;
 
 				bool all_closed = true;
 				static foreach (i; 0 .. OBSERVERS.length)
-					if (!es.sources[i].closed)
+					if (!es.closed[i])
 						all_closed = false;
 				if (all_closed) target.close();
 				break;
@@ -544,7 +560,7 @@ auto merge(OBSERVERS...)(OBSERVERS observers)
 	foreach (i, O; OBSERVERS) {
 		swap(es.sources[i], observers[i]);
 
-		if (!es.sources[i].closed)
+		if (!es.closed[i])
 			es.sources[i].connect(es.connections[i], &onSourceEvent!i, ret);
 	}
 	return ret;
