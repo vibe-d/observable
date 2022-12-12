@@ -86,12 +86,29 @@ nothrow unittest {
 	blocking manner. Usually, a separate task is used to drain the observer to
 	ensure sequential processing with no concurrency/race-conditions.
 */
-Observer!(ObservableType!O) subscribe(O)(O observable)
+Observer!(ObservableType!O) subscribe(O)(auto ref O observable)
 	if (isObservable!O)
 {
 	Observer!(ObservableType!O) ret;
 	ret.initialize(observable);
 	return ret;
+}
+
+unittest { // test non-copyable observable
+	static struct MyObservable {
+		alias Event = ObservedEvent!int;
+		private Signal!Event m_signal;
+		void connect(C, ARGS...)(ref SignalConnection conn, C c, ARGS args)
+		nothrow {
+			m_signal.socket.connect(conn, c, args);
+		}
+		@disable this(this);
+	}
+
+	MyObservable mo;
+	auto o = mo.subscribe();
+	mo.m_signal.emit(MyObservable.Event(1));
+	assert(o.consumeOne == 1);
 }
 
 
