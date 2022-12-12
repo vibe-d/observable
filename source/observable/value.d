@@ -1,4 +1,4 @@
-/** Implements a reactive value wrapper struct.
+/** Implements a reactive value interface with various implementations.
 
 	Copyright: Copyright © 2011-2022 Sönke Ludwig
 	Authors: Sönke Ludwig
@@ -10,6 +10,104 @@ import observable.observable;
 import observable.signal;
 import std.conv;
 import std.exception;
+
+
+/** Maps a reactive value using a predicate.
+
+	The result of this operation is a read-only reactive value that gets updated
+	with `pred(value)` whenever `value` changes.
+
+	As an optimization, the predicate will only be invoked if either at least
+	one observer is connected to the returned value, or when the value is
+	explicitly read.
+*/
+auto map(alias pred, V)(auto ref V value)
+	if (isReactiveValue!V)
+{
+	import std.typecons : RefCounted, RefCountedAutoInitialize, refCounted;
+
+	alias T = typeof(value.get);
+	alias U = typeof(pred(T.init));
+
+	static struct Context {
+		alias Ref = RefCounted!(Context, RefCountedAutoInitialize.no);
+
+		@disable this(this);
+		Signal!(ObservedEvent!U) eventSignal;
+		SignalConnection conn;
+		T pendingValue;
+		bool valuePending;
+		U value;
+	}
+
+	static struct MappedValue {
+		alias Event = ObservedEvent!U;
+
+		private {
+			Context.Ref m_ctx;
+		}
+
+		void connect(C, ARGS...)(ref SignalConnection conn, auto ref C callable, auto ref ARGS args)
+		{
+			m_ctx.eventSignal.socket.connect(conn, callable, args);
+		}
+
+		alias get this;
+
+		@property U get()
+		{
+			if (m_ctx.valuePending) {
+				m_ctx.valuePending = false;
+				m_ctx.value = pred(m_ctx.pendingValue);
+			}
+			return m_ctx.value;
+		}
+	}
+
+	static void onEvent(V.Event evt, Context.Ref ctx)
+	{
+		final switch (evt.kind) with (Value!T.Event.Kind) {
+			case close:
+				ctx.eventSignal.emit(MappedValue.Event.close);
+				break;
+			case event:
+				if (ctx.eventSignal.empty) {
+					ctx.pendingValue = evt.eventValue;
+					ctx.valuePending = true;
+				} else ctx.eventSignal.emit(MappedValue.Event(pred(evt.eventValue)));
+				break;
+		}
+	}
+
+	MappedValue ret;
+	ret.m_ctx.refCountedStore.ensureInitialized();
+	ret.m_ctx.pendingValue = value.get;
+	ret.m_ctx.valuePending = true;
+	value.connect(ret.m_ctx.conn, &onEvent, ret.m_ctx);
+	return ret;
+}
+
+///
+unittest {
+	import std.conv : to;
+
+	Value!int v;
+	v = 1;
+
+	Value!string vs;
+	vs = v.map!(i => i.to!string);
+	assert(vs == "1");
+	v = 2;
+	assert(vs == "2");
+}
+
+static assert (isObservable!(typeof(Value!int.init.map!(i => "foo"))));
+static assert (isReactiveValue!(typeof(Value!int.init.map!(i => "foo"))));
+
+
+/** Determines whether the given type implements the reactive value interface.
+*/
+enum isReactiveValue(T) = isObservable!T && is(typeof(T.init.get));
 
 
 /** Wrapper for a value with observable semantics.
@@ -50,16 +148,19 @@ struct Value(T)
 	}
 
 	/// Assigns a new static value
-	void opAssign(U : T)(U val) { set(val); }
+	void opAssign(U : T)(U val) if (!isReactiveValue!U)
+	{
+		set(val);
+	}
 
 	/** Assigns/binds another `Value` dynamically.
 
 		Any later value changes in `val` will also change the value of this
 		instance accordingly.
 	*/
-	void opAssign(U : T)(ref Value!U val)
+	void opAssign(U)(auto ref U val) if (isReactiveValue!U)
 	{
-		set(val.get());
+		set(val.get);
 		val.connect(m_assignConnection, &setFromEvent);
 	}
 
@@ -103,7 +204,7 @@ struct Value(T)
 		This method can be used to get the contained value in cases where an
 		explicit syntax is needed.
 	*/
-	inout(T) get() inout { return m_value; }
+	@property inout(T) get() inout { return m_value; }
 
 	/** Explicitly sets a new value.
 
@@ -171,6 +272,7 @@ struct Value(T)
 }
 
 static assert (isObservable!(Value!int));
+static assert (isReactiveValue!(Value!int));
 
 
 /** Read-only view of a `Value!T`.
@@ -208,7 +310,7 @@ struct ConstValue(T) {
 	}
 
 	/// explicit getter
-	inout(T) get() inout { assert(!!m_value); return m_value.get; }
+	@property inout(T) get() inout { assert(!!m_value); return m_value.get; }
 
 	/** Waits on a `Value` until the specified condition is met.
 	*/
@@ -238,6 +340,7 @@ struct ConstValue(T) {
 }
 
 static assert (isObservable!(ConstValue!int));
+static assert (isReactiveValue!(ConstValue!int));
 
 
 unittest { // test Observable support
