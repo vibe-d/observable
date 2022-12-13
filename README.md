@@ -21,6 +21,10 @@ creating heap closures when listening for events.
 Signal/slot example
 -------------------
 
+`Signal` can be used to create direct call connections between source and
+destination. All observer callbacks of a signal will be called synchronously,
+whenever the signal gets emitted.
+
 ```D
 class Slider {
     private {
@@ -62,8 +66,13 @@ class MyDialog {
 }
 ```
 
+
 Observable example
 ------------------
+
+`Observable` adds an internal event queue to each observer, so that observers
+are independent of each other and do not interfere with the observable's
+execution.
 
 ```D
 class Slider {
@@ -105,6 +114,41 @@ class MyDialog {
             foreach (value; m_slider.valueChanges.subscribe)
                 m_label.caption = value.to!string;
         });
+    }
+}
+```
+
+
+Reactive value example
+----------------------
+
+Reactive values simplify the connection of properties by exposing an observable
+interface to handle updates. Assigning a reactive value to another will
+automatically update the latter whenever the assigned value changes. Reactive
+values are also observable, with `subscribe` working just like for `Observable`.
+
+```D
+class Slider {
+    @property ref Value!double value();
+}
+
+class Label {
+    @property ref Value!string caption();
+}
+
+class MyDialog {
+    private {
+        Label m_label;
+        Slider m_slider;
+        SignalConnection m_valueConnection;
+    }
+
+    this()
+    {
+        m_slider = new Slider;
+
+        m_label = new Label;
+        m_label.caption = m_slider.value.map!(n => n.to!string);
     }
 }
 ```
