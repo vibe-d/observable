@@ -14,6 +14,7 @@ import observable.signal : Signal, SignalConnection;
 
 import core.time : Duration;
 import std.meta : allSatisfy, staticMap;
+import std.traits : isCopyable;
 import std.typecons : RefCounted, RefCountedAutoInitialize, refCounted;
 import taggedalgebraic.taggedunion;
 import vibe.core.log : logException;
@@ -458,7 +459,7 @@ class ObserverClosedException : Exception {
 	The return value is an observer that emits the transformed events.
 */
 auto map(alias fun, O)(O source)
-	if (isObservable!O)
+	if (isObservable!O && isCopyable!O)
 {
 	alias T = ObservableType!O;
 	alias TM = typeof(fun(T.init));

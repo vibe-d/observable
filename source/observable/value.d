@@ -10,23 +10,24 @@ import observable.observable;
 import observable.signal;
 import std.conv;
 import std.exception;
+import std.meta : allSatisfy, staticMap;
 
 
-/** Maps a reactive value using a predicate.
+/** Maps one or more reactive values using a predicate.
 
 	The result of this operation is a read-only reactive value that gets updated
-	with `pred(value)` whenever `value` changes.
+	with `pred(values)` whenever any of `values` changes.
 
 	As an optimization, the predicate will only be invoked if either at least
 	one observer is connected to the returned value, or when the value is
 	explicitly read.
 */
-auto map(alias pred, V)(auto ref V value)
-	if (isReactiveValue!V)
+auto mapValue(alias pred, V...)(auto ref V values)
+	if (allSatisfy!(isReactiveValue, V))
 {
 	import std.typecons : RefCounted, RefCountedAutoInitialize, refCounted;
 
-	alias T = typeof(value.get);
+	alias T = staticMap!(ValueType, V);
 	alias U = typeof(pred(T.init));
 
 	static struct Context {
@@ -34,10 +35,19 @@ auto map(alias pred, V)(auto ref V value)
 
 		@disable this(this);
 		Signal!(ObservedEvent!U) eventSignal;
-		SignalConnection conn;
-		T pendingValue;
+		SignalConnection[V.length] conns;
+		T inputValues;
 		bool valuePending;
 		U value;
+
+		U getValue()
+		{
+			if (valuePending) {
+				valuePending = false;
+				value = pred(inputValues);
+			}
+			return value;
+		}
 	}
 
 	static struct MappedValue {
@@ -54,36 +64,32 @@ auto map(alias pred, V)(auto ref V value)
 
 		alias get this;
 
-		@property U get()
-		{
-			if (m_ctx.valuePending) {
-				m_ctx.valuePending = false;
-				m_ctx.value = pred(m_ctx.pendingValue);
-			}
-			return m_ctx.value;
-		}
+		@property U get() { return m_ctx.getValue(); }
 	}
 
-	static void onEvent(V.Event evt, Context.Ref ctx)
+	static void onEvent(size_t i)(V[i].Event evt, Context.Ref ctx)
 	{
-		final switch (evt.kind) with (Value!T.Event.Kind) {
+		final switch (evt.kind) with (Value!(T[i]).Event.Kind) {
 			case close:
 				ctx.eventSignal.emit(MappedValue.Event.close);
 				break;
 			case event:
-				if (ctx.eventSignal.empty) {
-					ctx.pendingValue = evt.eventValue;
-					ctx.valuePending = true;
-				} else ctx.eventSignal.emit(MappedValue.Event(pred(evt.eventValue)));
+				ctx.inputValues[i] = evt.eventValue;
+				ctx.valuePending = true;
+				if (!ctx.eventSignal.empty)
+					ctx.eventSignal.emit(MappedValue.Event(ctx.getValue()));
 				break;
 		}
 	}
 
 	MappedValue ret;
 	ret.m_ctx.refCountedStore.ensureInitialized();
-	ret.m_ctx.pendingValue = value.get;
 	ret.m_ctx.valuePending = true;
-	value.connect(ret.m_ctx.conn, &onEvent, ret.m_ctx);
+
+	static foreach (i; 0 .. V.length) {
+		ret.m_ctx.inputValues[i] = values[i].get;
+		values[i].connect(ret.m_ctx.conns[i], &onEvent!i, ret.m_ctx);
+	}
 	return ret;
 }
 
@@ -95,19 +101,48 @@ unittest {
 	v = 1;
 
 	Value!string vs;
-	vs = v.map!(i => i.to!string);
+	vs = v.mapValue!(i => i.to!string);
 	assert(vs == "1");
 	v = 2;
 	assert(vs == "2");
 }
 
-static assert (isObservable!(typeof(Value!int.init.map!(i => "foo"))));
-static assert (isReactiveValue!(typeof(Value!int.init.map!(i => "foo"))));
+///
+unittest {
+	Value!int a, b, c;
+	a = 1;
+	b = 2;
+
+	// bind the map result to c
+	c = mapValue!((i, j) => i + j)(a, b);
+	assert(c == 3);
+
+	// any update of a or b should set a new result in c
+	a = 4;
+	assert(c == 6);
+	b = 4;
+	assert(c == 8);
+
+	// destroying one of the input values cancels the connection
+	destroy(a);
+	b = 5;
+	assert(c == 8);
+}
+
+static assert (isObservable!(typeof(Value!int.init.mapValue!(i => "foo"))));
+static assert (isReactiveValue!(typeof(Value!int.init.mapValue!(i => "foo"))));
 
 
 /** Determines whether the given type implements the reactive value interface.
 */
-enum isReactiveValue(T) = isObservable!T && is(typeof(T.init.get));
+enum isReactiveValue(V) = isObservable!V && is(typeof(V.init.get));
+
+
+/** Determines the stored type within a reactive value.
+*/
+template ValueType(V) if (isReactiveValue!V) {
+	alias ValueType = typeof(V.init.get);
+}
 
 
 /** Wrapper for a value with observable semantics.
@@ -244,8 +279,6 @@ struct Value(T)
 
 	private void doSet(T val)
 	{
-		m_assignConnection.disconnect();
-
 		if (m_interceptor) m_interceptor(val);
 		if (m_value !is val) {
 			m_beforeChangeSignal.emit(val);
