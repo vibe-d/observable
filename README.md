@@ -148,7 +148,7 @@ class MyDialog {
         m_slider = new Slider;
 
         m_label = new Label;
-        m_label.caption = m_slider.value.map!(n => n.to!string);
+        m_label.caption = m_slider.value.mapValue!(n => n.to!string);
     }
 }
 ```
