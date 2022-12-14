@@ -428,6 +428,14 @@ unittest { // test bound assignment
 void synchronizeWith(T, U)(ref Value!T src, ref Value!U target, ref SignalConnectionContainer conns)
 	if (is(T : U) && is(U : T))
 {
+	// FIXME: We are capturing the references to the Value!T instances in
+	//        closures here. Since D so far does not support disabling implicit
+	//        moves of struct instances, this could lead to memory corruption
+	//        issues under certain circumstances. To work around this, we'd have
+	//        to perform some kind of dynamic memory allocation (could use
+	//        reference counting). Unfortunately that would have to happen
+	//        within Value!T and cannot be done here, which would be highly
+	//        undesirable.
 	target.set(src.get());
 	bool updating_source;
 	target.beforeChangeSignal.connect(conns, (v) {
@@ -472,7 +480,6 @@ nothrow unittest {
 	assert(a == 13);
 	assert(b == 14);
 }
-
 
 
 private bool doWaitUntil(T, bool uninterruptible, P)(ref Value!T value, Duration timeout, scope P predicate)
