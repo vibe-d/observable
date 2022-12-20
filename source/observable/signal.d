@@ -385,12 +385,17 @@ struct SignalConnectionContainer {
 	private {
 		SignalConnection[4] m_smallConnections;
 		size_t m_smallConnectionCount;
-		Array!SignalConnection m_connections;
+		union { // hack to avoid calling the m_connections field destructor
+			Array!SignalConnection m_connections;
+		}
 	}
 
 	~this()
 	@safe nothrow {
 		clear();
+		// destroy m_connections manually to be able to force @safe destruction
+		// note that no references to the array can escape SignalConnectionContainer
+		() @trusted { destroy(m_connections); } ();
 	}
 
 	void add(SignalConnection conn)
@@ -410,7 +415,7 @@ struct SignalConnectionContainer {
 	}
 }
 
-unittest {
+@safe unittest {
 	SignalConnectionContainer c;
 	Signal!() sig;
 	size_t cnt = 0;
@@ -423,7 +428,7 @@ unittest {
 	assert(cnt == 10);
 }
 
-unittest {
+@safe unittest {
 	SignalConnectionContainer c;
 	Signal!() sig;
 	size_t cnt = 0;
