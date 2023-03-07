@@ -61,7 +61,7 @@ class MyDialog {
 
         m_slider = new Slider;
         m_slider.valueChangeSignal.connect(m_valueConnection,
-            (value) => slider.caption = value.to!string);
+            (value) => m_label.caption = value.to!string);
     }
 }
 ```
