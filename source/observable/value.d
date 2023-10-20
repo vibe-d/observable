@@ -494,7 +494,9 @@ private bool doWaitUntil(T, bool uninterruptible, P)(ref Value!T value, Duration
 	auto evt = createManualEvent();
 	int cnt = evt.emitCount;
 	SignalConnection conn;
-	value.changeSignal.connect(conn, &evt.emit);
+	// NOTE: evt is guaranteed to be disconnected before its EOL, due to the
+	//       scoped conn
+	value.changeSignal.connect(conn, () @trusted { return &evt.emit; } ());
 	while (true) {
 		if (timeout != Duration.max) {
 			auto to = et - MonoTime.currTime;
