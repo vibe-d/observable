@@ -831,14 +831,19 @@ class SharedSignal(P...) {
 
 	private void emitterTask()
 	nothrow {
+		import std.typecons : Tuple, tuple;
 		import vibe.core.sync : scopedMutexLock;
 
 		auto thr = Thread.getThis();
 
 		while(true) {
-			P params;
+			Tuple!P params;
+
 			try {
-				auto p = receiveOnly!P();
+				static if (P.length == 1)
+					auto p = tuple(receiveOnly!P());
+				else
+					auto p = receiveOnly!P();
 				swap(params, p);
 			} catch (Exception e) assert(false, e.msg);
 
@@ -853,7 +858,7 @@ class SharedSignal(P...) {
 			}
 
 			foreach (s; slots)
-				if (s) s(params);
+				if (s) s(params.expand);
 		}
 	}
 }
@@ -872,6 +877,28 @@ unittest {
 
 	auto th = new Thread({
 		signal.emit(42);
+	});
+	th.start();
+	th.join();
+
+	while (!called) sleep(10.msecs);
+}
+
+unittest {
+	shared signal = new shared SharedSignal!(int, int);
+
+	auto mainthread = Thread.getThis();
+
+	bool called;
+	signal.connect((v, w) {
+		assert(v == 42);
+		assert(w == 43);
+		assert(Thread.getThis() is mainthread);
+		called = true;
+	});
+
+	auto th = new Thread({
+		signal.emit(42, 43);
 	});
 	th.start();
 	th.join();
