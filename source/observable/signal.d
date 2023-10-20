@@ -724,7 +724,7 @@ private final class CallableConnectionHead(S, C, FP...) : TypedConnectionHead!(S
 */
 class SharedSignal(P...) {
 	///
-	public alias shared(void delegate(P)) Slot;
+	public alias shared(void delegate(P) nothrow) Slot;
 
 	private static struct ThreadSlots {
 		Thread thread;
@@ -738,8 +738,8 @@ class SharedSignal(P...) {
 	}
 
 	this()
-	{
-		m_mutex = new Mutex;
+	shared {
+		m_mutex = new shared Mutex;
 	}
 
 	///
@@ -830,24 +830,53 @@ class SharedSignal(P...) {
 	}
 
 	private void emitterTask()
-	{
+	nothrow {
+		import vibe.core.sync : scopedMutexLock;
+
 		auto thr = Thread.getThis();
 
 		while(true) {
-			receive((P params){
-				Slot[] slots;
-				synchronized (m_mutex) {
-					foreach (ref ts; m_threads)
-						if (ts.thread is thr) {
-							slots = ts.slots;
-							break;
-						}
-				}
-				foreach (s; slots)
-					if (s) s(params);
-			});
+			P params;
+			try {
+				auto p = receiveOnly!P();
+				swap(params, p);
+			} catch (Exception e) assert(false, e.msg);
+
+			Slot[] slots;
+			{
+				auto l = scopedMutexLock(m_mutex);
+				foreach (ref ts; m_threads)
+					if (ts.thread is thr) {
+						slots = ts.slots;
+						break;
+					}
+			}
+
+			foreach (s; slots)
+				if (s) s(params);
 		}
 	}
+}
+
+unittest {
+	shared signal = new shared SharedSignal!int;
+
+	auto mainthread = Thread.getThis();
+
+	bool called;
+	signal.connect((v) {
+		assert(v == 42);
+		assert(Thread.getThis() is mainthread);
+		called = true;
+	});
+
+	auto th = new Thread({
+		signal.emit(42);
+	});
+	th.start();
+	th.join();
+
+	while (!called) sleep(10.msecs);
 }
 
 
