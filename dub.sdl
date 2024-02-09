@@ -7,3 +7,4 @@ authors "Sönke Ludwig"
 targetType "library"
 
 dependency "vibe-core" version=">=1.0.0 <3.0.0-0"
+dependency "vibe-container" version=">=1.0.2 <2.0.0-0"
