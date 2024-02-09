@@ -636,7 +636,7 @@ private class TypedConnectionHead(P...) : ConnectionHead {
 }
 
 private final class CallableConnectionHead(S, C, FP...) : TypedConnectionHead!(S.Params) {
-	import vibe.internal.allocator : Mallocator, make, dispose;
+	import vibe.container.internal.utilallocator : Mallocator, make, dispose;
 	import std.traits : hasIndirections;
 	import core.memory : GC;
 
