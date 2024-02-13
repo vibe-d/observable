@@ -509,8 +509,9 @@ auto map(alias fun, O)(O source)
 auto filter(alias pred, O)(O source)
 	if (isObservable!O && is(typeof(pred(ObservableType!O.init)) == bool))
 {
-	static struct OM {
+	static struct OM(PRED) {
 		private O source;
+		private PRED pred;
 
 		alias Event = O.Event;
 
@@ -518,16 +519,18 @@ auto filter(alias pred, O)(O source)
 
 		void connect(C, ARGS...)(ref SignalConnection connection, C callable, ARGS args)
 		{
-			source.connect(connection, function(Event val, C callable, ARGS args) {
+			source.connect(connection, function(Event val, C callable, ARGS args, PRED pred) {
 					if (!val.isEvent || pred(val.eventValue))
 						callable(val, args);
-				}, callable, args);
+				}, callable, args, pred);
 		}
 	}
 
-	static assert(isObservable!OM);
+	// convert alias function to a local function, so that it can be passed
+	// down as a delegate
+	bool predWrapper(ObservableType!O v) { return pred(v); }
 
-	return OM(source);
+	return OM!(typeof(&predWrapper))(source, &predWrapper);
 }
 
 ///
@@ -546,6 +549,21 @@ auto filter(alias pred, O)(O source)
 	assert(observer.consumeOne == 4);
 }
 
+@safe unittest {
+	ObservableSource!int source;
+	int min = 3;
+	auto observer = source
+		.filter!(i => i >= min)
+		.subscribe();
+
+	source.put(1);
+	source.put(2);
+	source.put(3);
+	source.put(4);
+
+	assert(observer.consumeOne == 3);
+	assert(observer.consumeOne == 4);
+}
 
 /** Combines multiple observers into one.
 
