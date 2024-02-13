@@ -96,7 +96,7 @@ struct Signal(P...) {
 	signal.emit(32);
 }
 
-/// This example shots the recommended convention for defining signals.
+/// This example shows the recommended convention for defining signals.
 unittest {
 	class Widget {
 		private {
