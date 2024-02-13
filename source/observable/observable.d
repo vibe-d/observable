@@ -15,7 +15,6 @@ import observable.signal : Signal, SignalConnection;
 import core.time : Duration;
 import std.meta : allSatisfy, staticMap;
 import std.traits : isCopyable;
-import std.typecons : RefCounted, RefCountedAutoInitialize, refCounted;
 import taggedalgebraic.taggedunion;
 import vibe.container.ringbuffer : RingBuffer;
 import vibe.core.log : logException;
@@ -23,13 +22,13 @@ import vibe.core.sync : LocalManualEvent, createManualEvent;
 
 
 ///
-unittest {
+@safe unittest {
 	import vibe.core.core : runTask, sleep;
 	import core.time : msecs;
 
 	ObservableSource!int source;
 
-	auto t1 = runTask({
+	auto t1 = runTask(() @safe {
 		try {
 			auto observer = source
 				.subscribe();
@@ -38,10 +37,10 @@ unittest {
 			assert(observer.consumeOne == 2);
 			assert(observer.consumeOne == 3);
 			assert(observer.empty);
-		} catch (Exception e) assert(false, e.toString);
+		} catch (Exception e) assert(false, e.msg);
 	});
 
-	auto t2 = runTask({
+	auto t2 = runTask(() @safe {
 		try {
 			auto observer = source
 				.map!(i => i * 2)
@@ -95,7 +94,7 @@ Observer!(ObservableType!O) subscribe(O)(auto ref O observable)
 	return ret;
 }
 
-unittest { // test non-copyable observable
+@safe unittest { // test non-copyable observable
 	static struct MyObservable {
 		alias Event = ObservedEvent!int;
 		private Signal!Event m_signal;
@@ -213,7 +212,7 @@ struct Observable(T, EXTRA_STORAGE = void)
 		}
 	}
 
-	alias PayloadRef = RefCounted!(Payload, RefCountedAutoInitialize.no);
+	alias PayloadRef = RCRef!Payload;
 
 	private {
 		PayloadRef m_payload;
@@ -226,7 +225,7 @@ struct Observable(T, EXTRA_STORAGE = void)
 		m_payload = rhs.m_payload;
 	}
 
-	@property bool closed() const { return m_payload.refCountedStore.isInitialized && m_payload.closed; }
+	@property bool closed() const { return m_payload && m_payload.closed; }
 
 	void connect(C, ARGS...)(ref SignalConnection connection, C callable, ARGS args)
 		if (is(typeof(callable(Event.init, args))))
@@ -263,7 +262,7 @@ struct Observable(T, EXTRA_STORAGE = void)
 
 	private void initialize()
 	{
-		m_payload.refCountedStore.ensureInitialized();
+		m_payload.ensureInitialized();
 	}
 }
 
@@ -321,7 +320,7 @@ struct Observer(T)
 	}
 
 	private alias Event = ObservedEvent!T;
-	private alias PayloadRef = RefCounted!(Payload, RefCountedAutoInitialize.no);
+	private alias PayloadRef = RCRef!Payload;
 
 	private {
 		PayloadRef m_payload;
@@ -413,14 +412,14 @@ struct Observer(T)
 
 	private void initialize(O)(ref O observable)
 	{
-		assert(!m_payload.refCountedStore.isInitialized, "Double-initializing observer!?");
-		m_payload.refCountedStore.ensureInitialized();
+		assert(!m_payload, "Double-initializing observer!?");
+		m_payload.ensureInitialized();
 		m_payload.event = createManualEvent();
 		observable.connect(m_payload.conn, &m_payload.put);
 	}
 }
 
-unittest {
+@safe unittest {
 	ObservableSource!int o;
 	auto obs = o.subscribe();
 	assert(!obs.pending);
@@ -448,7 +447,7 @@ static assert(isInputRange!(Observer!int));
 */
 class ObserverClosedException : Exception {
 	this(string file = __FILE__, size_t line = __LINE__)
-	{
+	@safe nothrow {
 		super("Attempt to consume event from closed observer.", file, line);
 	}
 }
@@ -486,7 +485,7 @@ auto map(alias fun, O)(O source)
 }
 
 ///
-unittest {
+@safe unittest {
 	ObservableSource!int source;
 	auto observer = source
 		.map!(i => 2 * i)
@@ -508,7 +507,7 @@ unittest {
 	predicate function `pred`.
 */
 auto filter(alias pred, O)(O source)
-	if (isObservable!O)
+	if (isObservable!O && is(typeof(pred(ObservableType!O.init)) == bool))
 {
 	static struct OM {
 		private O source;
@@ -532,7 +531,7 @@ auto filter(alias pred, O)(O source)
 }
 
 ///
-unittest {
+@safe unittest {
 	ObservableSource!int source;
 	auto observer = source
 		.filter!(i => i % 2 == 0)
@@ -614,7 +613,7 @@ auto merge(OBSERVERS...)(OBSERVERS observers)
 }
 
 ///
-unittest {
+@safe unittest {
 	ObservableSource!int oint;
 	ObservableSource!string ostr;
 
@@ -697,7 +696,7 @@ auto delay(O)(ref O source, Duration delay)
 }
 
 ///
-unittest {
+@safe unittest {
 	import core.time : msecs;
 	import std.algorithm.iteration : each;
 	import std.datetime.stopwatch : StopWatch;
@@ -745,4 +744,56 @@ unittest {
 	//  50 ms, delayed: 2
 	// 100 ms, immediate: 3
 	// 150 ms, delayed: 3
+}
+
+
+// Variant of std.typecons.RefCounted that has a fully @safe interface
+// Note that there are still safety wholes (destroying the RCRef while
+// the payload is still accessed), but they don't matter for the usage
+// patterns in this library, but allow everything else to be @safe
+private struct RCRef(T) {
+	import core.stdc.stdlib : malloc, free;
+	import std.algorithm.mutation : moveEmplace;
+
+	static struct Context {
+		T payload;
+		int refCount;
+	}
+	private {
+		Context* m_context;
+	}
+
+	this(this) { if (m_context) m_context.refCount++; }
+	~this() { reset(); }
+
+	@property ref inout(T) payload() inout return scope { assert(m_context !is null); return m_context.payload; }
+
+	bool opCast(T)() const if (is(T == bool)) { return m_context !is null; }
+
+	alias payload this;
+
+	void initialize(T payload)
+	{
+		assert(!m_context);
+		() @trusted {
+			m_context = cast(Context*)malloc(Context.sizeof);
+			m_context.refCount = 1;
+			payload.moveEmplace(m_context.payload);
+		} ();
+	}
+
+	void ensureInitialized()
+	{
+		if (!m_context)
+			initialize(T.init);
+	}
+
+	void reset()
+	{
+		if (!m_context) return;
+		if (!--m_context.refCount) {
+			destroy(m_context.payload);
+			() @trusted { free(m_context); } ();
+		}
+	}
 }
