@@ -5,7 +5,7 @@
 	`nothrow` for the most part, so that the subscriber side cannot interfere
 	with the side that emits events.
 
-	Copyright: Copyright © 2020-2021 Sönke Ludwig
+	Copyright: Copyright © 2020-2024 Sönke Ludwig
 	Authors: Sönke Ludwig
 */
 module observable.observable;
@@ -17,9 +17,9 @@ import std.meta : allSatisfy, staticMap;
 import std.traits : isCopyable;
 import std.typecons : RefCounted, RefCountedAutoInitialize, refCounted;
 import taggedalgebraic.taggedunion;
+import vibe.container.ringbuffer : RingBuffer;
 import vibe.core.log : logException;
 import vibe.core.sync : LocalManualEvent, createManualEvent;
-import vibe.internal.array : FixedRingBuffer;
 
 
 ///
@@ -298,7 +298,7 @@ template ObservedEvent(T)
 struct Observer(T)
 {
 	private static struct Payload {
-		FixedRingBuffer!T buffer;
+		RingBuffer!T buffer;
 		bool closed;
 		LocalManualEvent event;
 		SignalConnection conn;
@@ -378,7 +378,7 @@ struct Observer(T)
 	void popFront()
 	{
 		if (this.empty) assert(false, "Calling .popFront on an empty subscriber");
-		m_payload.buffer.popFront();
+		m_payload.buffer.removeFront();
 	}
 
 	/** Reads a single event.
@@ -407,7 +407,7 @@ struct Observer(T)
 		if (this.empty) return false;
 
 		swap(dst, m_payload.buffer.front);
-		m_payload.buffer.popFront();
+		m_payload.buffer.removeFront();
 		return true;
 	}
 
