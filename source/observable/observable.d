@@ -771,6 +771,7 @@ auto delay(O)(ref O source, Duration delay)
 // patterns in this library, but allow everything else to be @safe
 private struct RCRef(T) {
 	import core.stdc.stdlib : malloc, free;
+	import core.memory : GC;
 	import std.algorithm.mutation : moveEmplace;
 
 	static struct Context {
@@ -795,6 +796,7 @@ private struct RCRef(T) {
 		assert(!m_context);
 		() @trusted {
 			m_context = cast(Context*)malloc(Context.sizeof);
+			GC.addRange(m_context, Context.sizeof, typeid(Context));
 			m_context.refCount = 1;
 			payload.moveEmplace(m_context.payload);
 		} ();
@@ -810,8 +812,12 @@ private struct RCRef(T) {
 	{
 		if (!m_context) return;
 		if (!--m_context.refCount) {
-			destroy(m_context.payload);
-			() @trusted { free(m_context); } ();
+			destroy(m_context);
+			() @trusted {
+				GC.removeRange(m_context);
+				free(m_context);
+			} ();
 		}
+		m_context = null;
 	}
 }
