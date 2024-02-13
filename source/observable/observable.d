@@ -502,6 +502,52 @@ unittest {
 }
 
 
+/** Only leaves through events for which a given predicate returns `true`.
+
+	The return value is an observer that emits only events that match the
+	predicate function `pred`.
+*/
+auto filter(alias pred, O)(O source)
+	if (isObservable!O)
+{
+	static struct OM {
+		private O source;
+
+		alias Event = O.Event;
+
+		@property bool closed() const { return source.closed; }
+
+		void connect(C, ARGS...)(ref SignalConnection connection, C callable, ARGS args)
+		{
+			source.connect(connection, function(Event val, C callable, ARGS args) {
+					if (!val.isEvent || pred(val.eventValue))
+						callable(val, args);
+				}, callable, args);
+		}
+	}
+
+	static assert(isObservable!OM);
+
+	return OM(source);
+}
+
+///
+unittest {
+	ObservableSource!int source;
+	auto observer = source
+		.filter!(i => i % 2 == 0)
+		.subscribe();
+
+	source.put(1);
+	source.put(2);
+	source.put(3);
+	source.put(4);
+
+	assert(observer.consumeOne == 2);
+	assert(observer.consumeOne == 4);
+}
+
+
 /** Combines multiple observers into one.
 
 	The events of the input observables will be stored in a `TaggedUnion` and
