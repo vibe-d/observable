@@ -1,3 +1,5 @@
 /.dub
 /observable-test*
+/libobservable.a
+/observable.lib
 dub.selections.json

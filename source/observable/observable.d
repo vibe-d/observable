@@ -15,6 +15,7 @@ import observable.signal : Signal, SignalConnection;
 import core.time : Duration;
 import std.meta : allSatisfy, staticMap;
 import std.traits : isCopyable;
+import std.typecons : Flag, Yes, No;
 import taggedalgebraic.taggedunion;
 import vibe.container.ringbuffer : RingBuffer;
 import vibe.core.log : logException;
@@ -382,31 +383,63 @@ struct Observer(T)
 
 	/** Reads a single event.
 
+		Params:
+			interruptible = Optional flag to determine whether the operation
+				can be interrupted using `Task.interrupt()`
+
+		Returns: Returns the received message, unless an exception gets thrown.
+
 		Throws: If the observer is closed and all events have been read,
-			`ObserverClosedException` will be thrown.
+			an `ObserverClosedException` will be thrown. If the operation is
+			interruptible and a task interrupt was triggered, an
+			`InterruptException` will be thrown.
 	*/
-	T consumeOne()
+	T consumeOne(Flag!"interruptible" interruptible = No.interruptible)()
 	{
 		T ret;
-		if (!tryConsumeOne(ret))
+		if (!tryConsumeOne!interruptible(ret))
 			throw new ObserverClosedException;
 		return ret;
 	}
 
 	/** Attempts to read a single event.
 
+		Params:
+			dst = Reference to be used for storing the consumed event
+			interruptible = Optional flag to determine whether the operation
+				can be interrupted using `Task.interrupt()` - if left to
+				`No.interruptible`, this method is `nothrow`
+
 		Returns: `true` is returned if an event was successfully read. Otherwise
 			a value of `false` is returned, which means that the observable
 			was closed and no more events are available.
 	*/
-	bool tryConsumeOne(ref T dst)
+	bool tryConsumeOne(Flag!"interruptible" interruptible = No.interruptible)(ref T dst)
 	{
 		import std.algorithm.mutation : swap;
 
-		if (this.empty) return false;
+		static if (interruptible) {
+			if (!waitInterruptible())
+				return false;
+		} else {
+			if (this.empty)
+				return false;
+		}
 
 		swap(dst, m_payload.buffer.front);
 		m_payload.buffer.removeFront();
+		return true;
+	}
+
+	private bool waitInterruptible()
+	{
+		auto ec = m_payload.event.emitCount;
+
+		while (m_payload.buffer.empty) {
+			if (m_payload.closed) return false;
+			ec = m_payload.event.wait(ec);
+		}
+
 		return true;
 	}
 
@@ -419,7 +452,10 @@ struct Observer(T)
 	}
 }
 
-@safe unittest {
+import std.range : isInputRange;
+static assert(isInputRange!(Observer!int));
+
+@safe nothrow unittest {
 	ObservableSource!int o;
 	auto obs = o.subscribe();
 	assert(!obs.pending);
@@ -439,8 +475,30 @@ struct Observer(T)
 	assert(obs.empty);
 }
 
-import std.range : isInputRange;
-static assert(isInputRange!(Observer!int));
+unittest {
+	import core.time : msecs, seconds;
+	import vibe.core.core : InterruptException, runTask, setTimer, sleepUninterruptible;
+
+	ObservableSource!int source;
+	auto observer = source
+		.subscribe();
+
+	auto t = runTask({
+		try {
+			observer.consumeOne!(Yes.interruptible);
+			assert(false, "Expecting to be interrupted");
+		}
+		catch (InterruptException e) return;
+		catch (Exception e) assert(false, e.msg);
+	});
+
+	auto watchdog = setTimer(1.seconds, { assert(false, "Test timed out"); });
+	scope (exit) watchdog.stop();
+	
+	sleepUninterruptible(50.msecs);
+	t.interrupt();
+	t.joinUninterruptible();
+}
 
 
 /** Thrown by `Observer.consumeOne` in case there are no more events left.
@@ -509,8 +567,9 @@ auto map(alias fun, O)(O source)
 auto filter(alias pred, O)(O source)
 	if (isObservable!O && is(typeof(pred(ObservableType!O.init)) == bool))
 {
-	static struct OM {
+	static struct OM(PRED) {
 		private O source;
+		private PRED pred;
 
 		alias Event = O.Event;
 
@@ -518,16 +577,18 @@ auto filter(alias pred, O)(O source)
 
 		void connect(C, ARGS...)(ref SignalConnection connection, C callable, ARGS args)
 		{
-			source.connect(connection, function(Event val, C callable, ARGS args) {
+			source.connect(connection, function(Event val, C callable, ARGS args, PRED pred) {
 					if (!val.isEvent || pred(val.eventValue))
 						callable(val, args);
-				}, callable, args);
+				}, callable, args, pred);
 		}
 	}
 
-	static assert(isObservable!OM);
+	// convert alias function to a local function, so that it can be passed
+	// down as a delegate
+	bool predWrapper(ObservableType!O v) { return pred(v); }
 
-	return OM(source);
+	return OM!(typeof(&predWrapper))(source, &predWrapper);
 }
 
 ///
@@ -546,6 +607,21 @@ auto filter(alias pred, O)(O source)
 	assert(observer.consumeOne == 4);
 }
 
+@safe unittest {
+	ObservableSource!int source;
+	int min = 3;
+	auto observer = source
+		.filter!(i => i >= min)
+		.subscribe();
+
+	source.put(1);
+	source.put(2);
+	source.put(3);
+	source.put(4);
+
+	assert(observer.consumeOne == 3);
+	assert(observer.consumeOne == 4);
+}
 
 /** Combines multiple observers into one.
 
@@ -753,6 +829,7 @@ auto delay(O)(ref O source, Duration delay)
 // patterns in this library, but allow everything else to be @safe
 private struct RCRef(T) {
 	import core.stdc.stdlib : malloc, free;
+	import core.memory : GC;
 	import std.algorithm.mutation : moveEmplace;
 
 	static struct Context {
@@ -777,6 +854,7 @@ private struct RCRef(T) {
 		assert(!m_context);
 		() @trusted {
 			m_context = cast(Context*)malloc(Context.sizeof);
+			GC.addRange(m_context, Context.sizeof, typeid(Context));
 			m_context.refCount = 1;
 			payload.moveEmplace(m_context.payload);
 		} ();
@@ -792,8 +870,12 @@ private struct RCRef(T) {
 	{
 		if (!m_context) return;
 		if (!--m_context.refCount) {
-			destroy(m_context.payload);
-			() @trusted { free(m_context); } ();
+			destroy(m_context);
+			() @trusted {
+				GC.removeRange(m_context);
+				free(m_context);
+			} ();
 		}
+		m_context = null;
 	}
 }
