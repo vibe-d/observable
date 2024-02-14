@@ -15,6 +15,7 @@ import observable.signal : Signal, SignalConnection;
 import core.time : Duration;
 import std.meta : allSatisfy, staticMap;
 import std.traits : isCopyable;
+import std.typecons : Flag, Yes, No;
 import taggedalgebraic.taggedunion;
 import vibe.container.ringbuffer : RingBuffer;
 import vibe.core.log : logException;
@@ -382,31 +383,63 @@ struct Observer(T)
 
 	/** Reads a single event.
 
+		Params:
+			interruptible = Optional flag to determine whether the operation
+				can be interrupted using `Task.interrupt()`
+
+		Returns: Returns the received message, unless an exception gets thrown.
+
 		Throws: If the observer is closed and all events have been read,
-			`ObserverClosedException` will be thrown.
+			an `ObserverClosedException` will be thrown. If the operation is
+			interruptible and a task interrupt was triggered, an
+			`InterruptException` will be thrown.
 	*/
-	T consumeOne()
+	T consumeOne(Flag!"interruptible" interruptible = No.interruptible)()
 	{
 		T ret;
-		if (!tryConsumeOne(ret))
+		if (!tryConsumeOne!interruptible(ret))
 			throw new ObserverClosedException;
 		return ret;
 	}
 
 	/** Attempts to read a single event.
 
+		Params:
+			dst = Reference to be used for storing the consumed event
+			interruptible = Optional flag to determine whether the operation
+				can be interrupted using `Task.interrupt()` - if left to
+				`No.interruptible`, this method is `nothrow`
+
 		Returns: `true` is returned if an event was successfully read. Otherwise
 			a value of `false` is returned, which means that the observable
 			was closed and no more events are available.
 	*/
-	bool tryConsumeOne(ref T dst)
+	bool tryConsumeOne(Flag!"interruptible" interruptible = No.interruptible)(ref T dst)
 	{
 		import std.algorithm.mutation : swap;
 
-		if (this.empty) return false;
+		static if (interruptible) {
+			if (!waitInterruptible())
+				return false;
+		} else {
+			if (this.empty)
+				return false;
+		}
 
 		swap(dst, m_payload.buffer.front);
 		m_payload.buffer.removeFront();
+		return true;
+	}
+
+	private bool waitInterruptible()
+	{
+		auto ec = m_payload.event.emitCount;
+
+		while (m_payload.buffer.empty) {
+			if (m_payload.closed) return false;
+			ec = m_payload.event.wait(ec);
+		}
+
 		return true;
 	}
 
@@ -419,7 +452,10 @@ struct Observer(T)
 	}
 }
 
-@safe unittest {
+import std.range : isInputRange;
+static assert(isInputRange!(Observer!int));
+
+@safe nothrow unittest {
 	ObservableSource!int o;
 	auto obs = o.subscribe();
 	assert(!obs.pending);
@@ -439,8 +475,30 @@ struct Observer(T)
 	assert(obs.empty);
 }
 
-import std.range : isInputRange;
-static assert(isInputRange!(Observer!int));
+unittest {
+	import core.time : msecs, seconds;
+	import vibe.core.core : InterruptException, runTask, setTimer, sleepUninterruptible;
+
+	ObservableSource!int source;
+	auto observer = source
+		.subscribe();
+
+	auto t = runTask({
+		try {
+			observer.consumeOne!(Yes.interruptible);
+			assert(false, "Expecting to be interrupted");
+		}
+		catch (InterruptException e) return;
+		catch (Exception e) assert(false, e.msg);
+	});
+
+	auto watchdog = setTimer(1.seconds, { assert(false, "Test timed out"); });
+	scope (exit) watchdog.stop();
+	
+	sleepUninterruptible(50.msecs);
+	t.interrupt();
+	t.joinUninterruptible();
+}
 
 
 /** Thrown by `Observer.consumeOne` in case there are no more events left.
