@@ -137,7 +137,7 @@ static assert(isObservable!(ObservableSource!int));
 
 /** Extracts the event tyoe of an observable.
 */
-alias ObservableType(O) = typeof(O.Event.init.eventValue);
+alias ObservableType(O) = TypeOf!(O.Event.Kind.event);
 
 
 /** The fundamental source for generating observable events.
