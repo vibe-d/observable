@@ -725,6 +725,7 @@ private struct ObserverNamedTypes(TYPES...)
 	`MonoTime` timestamp of the original occurrence of each event.
 */
 auto timestamp(O)(ref O source)
+	if (isObservable!O)
 {
 	import core.time : MonoTime;
 	alias T = ObservableType!O;
@@ -736,6 +737,25 @@ struct TimestampedEvent(T)
 	import core.time : MonoTime;
 	T event;
 	MonoTime timestamp;
+}
+
+unittest {
+	import core.time : MonoTime, seconds;
+	import vibe.core.core : runTask;
+
+	MonoTime now = MonoTime.currTime();
+
+	ObservableSource!int source;
+
+	runTask({
+		source.put(1);
+		source.close();
+	});
+
+	foreach (el; source.timestamp.subscribe) {
+		assert(el.event == 1);
+		assert(el.timestamp >= now && el.timestamp <= now + 1.seconds);
+	}
 }
 
 
