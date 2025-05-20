@@ -481,6 +481,47 @@ nothrow unittest {
 	assert(b == 14);
 }
 
+/** Similar to `synchronizeWith`, synchronizes a `Value` with another value.
+
+	In contrast to `syncrhronizeWith`, this works using a bare `Signal`,
+	combined with getters and setters.
+*/
+void synchronizeWithSignal(T, GETTER, SETTER)(ref Value!T src,
+	ref SignalSocket!T target_change, SETTER target_setter,
+	ref SignalConnectionContainer conns)
+{
+	target_setter(src.get());
+	bool updating_source;
+	target_change.connect(conns, (T value) nothrow {
+		if (updating_source) return;
+		updating_source = true;
+		scope (exit) updating_source = false;
+		src.set(value);
+	});
+	src.changeVSignal.connect(conns, (T v) nothrow {
+		if (!updating_source)
+			target_setter(v);
+	});
+}
+/// ditto
+void synchronizeWithSignal(T, GETTER, SETTER)(ref Value!T src,
+	ref SignalSocket!() target_change, GETTER target_getter,
+	SETTER target_setter, ref SignalConnectionContainer conns)
+{
+	target_setter(src.get());
+	bool updating_source;
+	target_change.connect(conns, () nothrow {
+		if (updating_source) return;
+		updating_source = true;
+		scope (exit) updating_source = false;
+		src.set(target_getter());
+	});
+	src.changeVSignal.connect(conns, (T v) nothrow {
+		if (!updating_source)
+			target_setter(v);
+	});
+}
+
 
 private bool doWaitUntil(T, bool uninterruptible, P)(ref Value!T value, Duration timeout, scope P predicate)
 {
