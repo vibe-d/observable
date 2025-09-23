@@ -133,6 +133,36 @@ static assert (isObservable!(typeof(Value!int.init.mapValue!(i => "foo"))));
 static assert (isReactiveValue!(typeof(Value!int.init.mapValue!(i => "foo"))));
 
 
+/** Modify the value using a callback.
+
+	This is a shorthand for getting the current value, modifying it and
+	setting the modified value.
+*/
+void modify(alias MODIFIER, T)(ref Value!T value)
+{
+	auto val = value.get;
+	MODIFIER(val);
+	value.set(val);
+}
+
+///
+unittest {
+	struct S {
+		int width;
+		int height;
+	}
+
+	Value!S value;
+
+	// set the whole value
+	value = S(1, 2);
+
+	// modify just one field
+	value.modify!((ref s) { s.height += 10; });
+	assert(value == S(1, 12));
+}
+
+
 /** Determines whether the given type implements the reactive value interface.
 */
 enum isReactiveValue(V) = isObservable!V && is(typeof(V.init.get));
