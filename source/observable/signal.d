@@ -398,6 +398,14 @@ struct SignalConnectionContainer {
 		() @trusted { destroy(m_connections); } ();
 	}
 
+	this(this)
+	@safe nothrow {
+		() @trusted {
+			try typeid(Array!SignalConnection).postblit(cast(void*)&m_connections);
+			catch (Exception e) assert(false, e.msg);
+		} ();
+	}
+
 	void add(SignalConnection conn)
 	@safe nothrow {
 		if (m_smallConnectionCount < m_smallConnections.length)
@@ -405,6 +413,16 @@ struct SignalConnectionContainer {
 		else {
 			() @trusted { m_connections ~= conn; } ();
 		}
+	}
+
+	void add(ref SignalConnectionContainer container)
+	@safe nothrow {
+		foreach (i; 0 .. container.m_smallConnectionCount)
+			add(container.m_smallConnections[i]);
+		() @trusted {
+			foreach (ref conn; container.m_connections)
+				add(conn);
+		} ();
 	}
 
 	void clear()
@@ -439,6 +457,46 @@ struct SignalConnectionContainer {
 	c = SignalConnectionContainer.init;
 	sig.emit();
 	assert(cnt == 10);
+}
+
+@safe unittest {
+	SignalConnectionContainer c;
+	Signal!() sig;
+	size_t cnt = 0;
+	foreach (i; 0 .. 10) sig.socket.connect(c, { cnt++; });
+
+	SignalConnectionContainer c2;
+	c2.add(c);
+	c.clear();
+
+	assert(cnt == 0);
+	sig.emit();
+	assert(cnt == 10);
+}
+
+@safe unittest {
+	SignalConnectionContainer c;
+	Signal!() sig;
+	size_t cnt = 0;
+	sig.socket.connect(c, { cnt++; });
+
+	SignalConnectionContainer c2;
+	c2 = c;
+	c2 = c;
+	c2 = c2;
+
+	sig.emit();
+	assert(cnt == 1);
+
+	sig.socket.connect(c2, { cnt++; });
+
+	sig.emit();
+	assert(cnt == 3);
+
+	c2 = SignalConnectionContainer.init;
+
+	sig.emit();
+	assert(cnt == 4);
 }
 
 
