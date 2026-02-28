@@ -14,6 +14,7 @@ import std.algorithm;
 import std.traits : isInstanceOf;
 import vibe.core.core;
 import vibe.core.concurrency;
+import vibe.container.ringbuffer;
 
 
 /** A thread local signal-slot implementation.
@@ -385,25 +386,12 @@ struct SignalConnectionContainer {
 	private {
 		SignalConnection[4] m_smallConnections;
 		size_t m_smallConnectionCount;
-		union { // hack to avoid calling the m_connections field destructor
-			Array!SignalConnection m_connections;
-		}
+		RingBuffer!SignalConnection m_connections;
 	}
 
 	~this()
 	@safe nothrow {
 		clear();
-		// destroy m_connections manually to be able to force @safe destruction
-		// note that no references to the array can escape SignalConnectionContainer
-		() @trusted { destroy(m_connections); } ();
-	}
-
-	this(this)
-	@safe nothrow {
-		() @trusted {
-			try typeid(Array!SignalConnection).postblit(cast(void*)&m_connections);
-			catch (Exception e) assert(false, e.msg);
-		} ();
 	}
 
 	void add(SignalConnection conn)
@@ -411,7 +399,9 @@ struct SignalConnectionContainer {
 		if (m_smallConnectionCount < m_smallConnections.length)
 			m_smallConnections[m_smallConnectionCount++] = conn;
 		else {
-			() @trusted { m_connections ~= conn; } ();
+			if (m_connections.full)
+				m_connections.capacity = max(4, 2 * m_connections.capacity);
+			m_connections.insertBack(conn);
 		}
 	}
 
@@ -420,14 +410,14 @@ struct SignalConnectionContainer {
 		foreach (i; 0 .. container.m_smallConnectionCount)
 			add(container.m_smallConnections[i]);
 		() @trusted {
-			foreach (ref conn; container.m_connections)
+			foreach (ref conn; container.m_connections[])
 				add(conn);
 		} ();
 	}
 
 	void clear()
 	@safe nothrow {
-		() @trusted { m_connections.clear(); } ();
+		m_connections.clear();
 		m_smallConnections[0 .. m_smallConnectionCount] = SignalConnection.init;
 		m_smallConnectionCount = 0;
 	}
