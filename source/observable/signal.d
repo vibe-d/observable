@@ -421,6 +421,12 @@ struct SignalConnectionContainer {
 		m_smallConnections[0 .. m_smallConnectionCount] = SignalConnection.init;
 		m_smallConnectionCount = 0;
 	}
+
+	void opAssign(SignalConnectionContainer other)
+	@safe nothrow {
+		clear();
+		add(other);
+	}
 }
 
 @safe unittest {
